@@ -55,3 +55,30 @@ async def transcribe_and_index_audio(file: UploadFile = File(...)):
         # Remove o arquivo temporário original da pasta temp para poupar espaço
         if os.path.exists(temp_file_path):
             os.remove(temp_file_path)
+
+@router.get("/history")
+async def get_indexed_history():
+    """
+    Retorna um resumo dos áudios/segmentos já indexados no ChromaDB.
+    """
+    try:
+        # Acessa a coleção do ChromaDB para recuperar os metadados salvos
+        from app.services.vector_service import collection
+        data = collection.get(include=["metadatas", "documents"])
+        
+        # Agrupa por arquivo de áudio indexado
+        history_map = {}
+        if data and "metadatas" in data and data["metadatas"]:
+            for meta, doc in zip(data["metadatas"], data["documents"]):
+                audio_name = meta.get("audio_filename", "Áudio Desconhecido")
+                if audio_name not in history_map:
+                    history_map[audio_name] = {"chunks_count": 0, "preview": doc[:100]}
+                history_map[audio_name]["chunks_count"] += 1
+
+        formatted_history = [
+            {"filename": name, **info} for name, info in history_map.items()
+        ]
+        
+        return {"status": "sucesso", "history": formatted_history}
+    except Exception as e:
+        return {"status": "erro", "history": [], "detail": str(e)}

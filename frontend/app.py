@@ -1,155 +1,173 @@
 import streamlit as st
 import requests
 
-# Configuração da Página
+# Configuração inicial da página
 st.set_page_config(
-    page_title="Juridical AI - Assistente Jurídico Inteligente",
+    page_title="Juridical AI - Análise Inteligente",
     page_icon="⚖️",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
-# Estilização CSS customizada para dar um tom mais profissional e corporativo
+# Estilização limpa oculta elementos nativos
 st.markdown("""
-    <style>
-    .main {
-        background-color: #f8f9fa;
-    }
-    .stTabs [data-baseweb="tab-list"] {
-        gap: 24px;
-    }
-    .stTabs [data-baseweb="tab"] {
-        height: 50px;
-        white-space: pre-wrap;
-        background-color: #ffffff;
-        border-radius: 8px 8px 0px 0px;
-        gap: 12px;
-        padding-top: 10px;
-        padding-bottom: 10px;
-    }
-    .stTabs [aria-selected="true"] {
-        background-color: #0f172a !important;
-        color: white !important;
-        font-weight: bold;
-    }
-    div.stButton > button:first-child {
-        background-color: #0f172a;
-        color: white;
-        border-radius: 6px;
-        border: none;
-        padding: 0.5rem 1rem;
-        font-weight: 600;
-    }
-    div.stButton > button:hover {
-        background-color: #1e293b;
-        color: white;
-    }
-    </style>
+<style>
+#MainMenu {visibility: hidden;}
+footer {visibility: hidden;}
+.viewerBadge_container__1QSob {visibility: hidden;}
+</style>
 """, unsafe_allow_html=True)
 
-# URL base do Backend FastAPI
-BACKEND_URL = "http://127.0.0.1:8000"
+# URLs dos Endpoints do Backend
+BACKEND_AUDIO_URL = "http://127.0.0.1:8000/api/v1/audio/transcribe"
+BACKEND_HISTORY_URL = "http://127.0.0.1:8000/api/v1/audio/history"
+BACKEND_RAG_URL = "http://127.0.0.1:8000/api/v1/rag/query"
 
-# --- SIDEBAR DE NAVEGAÇÃO / STATUS ---
+# Controle de Sessão
+if "authenticated" not in st.session_state:
+    st.session_state.authenticated = False
+if "transcription_result" not in st.session_state:
+    st.session_state.transcription_result = None
+if "chat_history" not in st.session_state:
+    st.session_state.chat_history = []
+
+def render_login_page():
+    st.markdown("<br><br>", unsafe_allow_html=True)
+    _, col2, _ = st.columns([1, 1.2, 1])
+    with col2:
+        st.markdown("## ⚖️ Juridical AI MVP")
+        st.markdown("Acesso soberano à plataforma de inteligência probatória.")
+        with st.form("login_form"):
+            email_input = st.text_input("E-mail Corporativo ou OAB", placeholder="advogado@tribunal.jus.br")
+            senha_input = st.text_input("Credencial de Segurança", type="password", placeholder="123456")
+            if st.form_submit_button("Entrar no Sistema", use_container_width=True):
+                if email_input.strip() != "" and senha_input == "123456":
+                    st.session_state.authenticated = True
+                    st.success("Login realizado com sucesso!")
+                    st.rerun()
+                else:
+                    st.error("Credenciais inválidas. Use qualquer e-mail e a senha: 123456")
+
+if not st.session_state.authenticated:
+    render_login_page()
+    st.stop()
+
+# Sidebar de Navegação
 with st.sidebar:
-    st.image("https://img.icons8.com/fluency/96/law.png", width=64)
-    st.title("Juridical AI MVP")
+    st.image("https://img.icons8.com/color/96/scales.png", width=70)
+    st.markdown("### Juridical AI")
+    st.caption("Enterprise MVP • Segurança OAB")
     st.markdown("---")
-    st.info("💡 **Dica:** Certifique-se de que o backend FastAPI está rodando na porta 8000.")
-    
-    # Status da Conexão com o Backend
-    try:
-        response = requests.get(f"{BACKEND_URL}/")
-        if response.status_code == 200:
-            st.success("🟢 Backend Conectado")
-        else:
-            st.warning("🟡 Backend instável")
-    except:
-        st.error("🔴 Backend Desconectado")
-        
+    nav_opcao = st.radio("Selecione o Módulo", ["🎙️ Degravação & Busca", "📄 Extração & RAG Documental"], label_visibility="collapsed")
     st.markdown("---")
-    st.markdown("### Configurações")
-    selected_model = st.selectbox("Modelo LLM", ["gpt-4o-mini", "llama3-70b (Groq)"])
+    if st.button("🔒 Sair do Sistema", use_container_width=True):
+        st.session_state.authenticated = False
+        st.rerun()
 
-# --- CABEÇALHO PRINCIPAL ---
-st.title("⚖️ Sistema Inteligente para Análise Jurídica")
-st.markdown("Plataforma integrada para degravação de audiências com marcação temporal e extração estruturada de dados de documentos.")
+# ------------------------------------------
+# MÓDULO 1: DEGRAVAÇÃO & BUSCA
+# ------------------------------------------
+if nav_opcao == "🎙️ Degravação & Busca":
+    st.markdown("# ⚖️ Gestão e Degravação de Audiências")
+    st.markdown("Transcrição estenográfica automatizada com indexação vetorial e marcação temporal.")
 
-# --- ABAS PRINCIPAIS ---
-tab1, tab2 = st.tabs(["🎙️ Degravação & Busca em Audiências", "📄 Extração de Dados de Documentos"])
-
-# ==========================================
-# ABA 1: DEGRAVAÇÃO & BUSCA EM ÁUDIOS
-# ==========================================
-with tab1:
-    st.header("Gestão e Consulta de Áudios de Audiências")
-    st.markdown("Faça o upload da gravação da audiência para gerar a transcrição com timestamps e realizar buscas semânticas.")
-
-    col1, col2 = st.columns([1, 1], gap="large")
-
-    with col1:
-        st.subheader("1. Enviar Nova Gravação")
-        audio_file = st.file_uploader("Selecione o arquivo de áudio (MP3, WAV, M4A)", type=["mp3", "wav", "m4a"])
-        
-        if audio_file is not None:
-            st.audio(audio_file)
-            if st.button("🚀 Processar e Degravar Áudio"):
-                with st.spinner("Enviando e processando áudio no Whisper... Isso pode levar alguns segundos."):
-                    # Simulação de envio para o endpoint do FastAPI
-                    # files = {"file": audio_file.getvalue()}
-                    # res = requests.post(f"{BACKEND_URL}/audio/transcribe", files=files)
-                    st.success("Áudio degravado com sucesso e indexado no ChromaDB!")
+    col_a, col_b = st.columns(2)
+    with col_a:
+        st.markdown("### 1. Enviar Nova Gravação")
+        uploaded_file = st.file_uploader("Arraste o arquivo de áudio ou clique para selecionar (MP3, WAV, M4A)", type=["mp3", "wav", "m4a"])
+        if uploaded_file:
+            st.info(f"Arquivo carregado: {uploaded_file.name} ({uploaded_file.size / 1024 / 1024:.2f} MB)")
+            if st.button("Processar e Transcrever Áudio", use_container_width=True):
+                with st.spinner("Enviando áudio para o motor de IA e indexando no ChromaDB..."):
+                    try:
+                        files = {"file": (uploaded_file.name, uploaded_file.getvalue(), uploaded_file.type)}
+                        response = requests.post(BACKEND_AUDIO_URL, files=files, timeout=600)
+                        if response.status_code == 200:
+                            st.session_state.transcription_result = response.json()
+                            st.success("Áudio processado e indexado com sucesso no disco!")
+                        else:
+                            st.error(f"Erro no servidor: {response.text}")
+                    except Exception as e:
+                        st.error(f"Falha de conexão: {str(e)}")
 
         st.markdown("---")
-        st.subheader("2. Consultar Trechos (RAG com Timestamps)")
-        query = st.text_input("O que você procura nesta audiência?", placeholder="Ex: O que o testigo de acusação falou sobre o horário?")
-        if st.button("🔍 Pesquisar na Audiência"):
-            if query:
-                with st.spinner("Buscando trechos relevantes..."):
-                    # Aqui chamaremos o endpoint do backend RAG
-                    st.markdown("### Resultados Encontrados:")
-                    st.info("⏱️ **[00:14:22]** - *Testemunha relata que chegou ao local por volta das 14h...*")
-                    st.success("⏱️ **[00:22:50]** - *Juiz questiona o réu acerca da assinatura do contrato...*")
-            else:
-                st.warning("Digite uma pergunta para iniciar a busca.")
+        st.markdown("### 📚 Áudios Indexados no Servidor")
+        try:
+            hist_res = requests.get(BACKEND_HISTORY_URL, timeout=5)
+            if hist_res.status_code == 200:
+                for item in hist_res.json().get("history", []):
+                    st.info(f"📁 **{item['filename']}** ({item['chunks_count']} blocos vetoriais)")
+        except Exception:
+            st.caption("Histórico indisponível.")
 
-    with col2:
-        st.subheader("3. Transcrição Completa da Audiência")
-        st.markdown("*(A transcrição estruturada aparecerá aqui após o processamento)*")
-        
-        # Exemplo visual de como o timestamp será exibido de forma limpa
-        transcription_container = st.container(height=450)
-        with transcription_container:
-            st.markdown("`[00:00:12]` **Juiz:** *Declaro aberta a presente audiência de instrução e julgamento...*")
-            st.markdown("`[00:01:05]` **Promotor:** *Excelência, reiteramos os termos da denúncia...*")
-            st.markdown("`[00:05:40]` **Defensor:** *MM. Juiz, a defesa tem preliminar a arguir...*")
+    with col_b:
+        st.markdown("### 3. Transcrição Estruturada da Audiência")
+        if st.session_state.transcription_result:
+            data = st.session_state.transcription_result
+            st.success(f"Total de segmentos processados: {data.get('segments_count', 0)}")
+            with st.expander("📄 Ver Texto Completo da Degravação", expanded=True):
+                st.write(data.get("full_text"))
+        else:
+            st.info("Faça o upload de uma gravação ao lado para visualizar a transcrição estenográfica estruturada.")
 
-# ==========================================
-# ABA 2: EXTRAÇÃO DE DADOS DE DOCUMENTOS
-# ==========================================
-with tab2:
-    st.header("Extração Automatizada de Documentos Jurídicos")
-    st.markdown("Envie petições, contratos ou sentenças para extração estruturada de metadados e resumo executivo.")
+# ------------------------------------------
+# MÓDULO 2: COPILOTO JURÍDICO & RAG
+# ------------------------------------------
+else:
+    st.markdown("# 📄 Copiloto Jurídico & RAG Documental")
+    st.markdown("Consulte peças processuais e áudios indexados com recuperação semântica vetorial.")
 
-    doc_file = st.file_uploader("Selecione o documento jurídico (PDF)", type=["pdf"])
+    # Busca a lista de áudios disponíveis para filtro no chat
+    audio_options = ["Todos os Áudios"]
+    try:
+        hist_res = requests.get(BACKEND_HISTORY_URL, timeout=5)
+        if hist_res.status_code == 200:
+            for item in hist_res.json().get("history", []):
+                audio_options.append(item["filename"])
+    except Exception:
+        pass
 
-    if doc_file is not None:
-        st.success(f"Arquivo carregado: **{doc_file.name}**")
-        if st.button("⚙️ Extrair Dados do Documento"):
-            with st.spinner("Analisando documento e estruturando dados com IA..."):
-                # Simulação da resposta estruturada do backend
-                st.markdown("---")
-                st.subheader("📊 Dados Extraídos com Sucesso")
-                
-                # Exibição em colunas / métricas simuladas
-                m1, m2, m3 = st.columns(3)
-                m1.metric("Número do Processo", "1002345-88.2026.8.26.0100")
-                m2.metric("Classe Processual", "Ação de Indenização")
-                m3.metric("Comarca / Vara", "TJSP - 1ª Vara Cível")
+    # Seletor organizado para escolher a fonte da consulta
+    selected_audio = st.selectbox("🎯 Filtrar consulta por gravação específica:", audio_options)
 
-                st.markdown("### 📝 Partes Envolvidas")
-                st.write("- **Autor:** João da Silva")
-                st.write("- **Réu:** Banco S.A.")
+    st.markdown("---")
 
-                st.markdown("### 📌 Resumo dos Pedidos / Objeto")
-                st.info("A parte autora alega cobrança indevida em conta corrente e requer tutela antecipada para suspensão dos descontos, além de danos morais no valor de R$ 10.000,00.")
+    # Exibe histórico do chat
+    for message in st.session_state.chat_history:
+        with st.chat_message(message["role"]):
+            st.markdown(message["content"])
+
+    # Input do Chat
+    if user_query := st.chat_input("Faça uma pergunta jurídica aos documentos ou áudios indexados..."):
+        st.session_state.chat_history.append({"role": "user", "content": user_query})
+        with st.chat_message("user"):
+            st.markdown(user_query)
+
+        with st.chat_message("assistant"):
+            with st.spinner("Consultando base vetorial ChromaDB e gerando fundamentação..."):
+                try:
+                    payload = {
+                        "question": user_query, 
+                        "k": 4,
+                        "audio_filter": None if selected_audio == "Todos os Áudios" else selected_audio
+                    }
+                    response = requests.post(BACKEND_RAG_URL, json=payload, timeout=60)
+                    
+                    if response.status_code == 200:
+                        rag_data = response.json()
+                        answer = rag_data.get("answer", "Sem resposta.")
+                        sources = rag_data.get("sources", [])
+                        
+                        full_response = f"{answer}\n\n**🔍 Fontes e Timestamps Citados:**"
+                        for src in sources:
+                            start_sec = int(src.get("start", 0))
+                            m, s = divmod(start_sec, 60)
+                            audio_origin = src.get('audio_filename', 'Áudio')
+                            full_response += f"\n- *[{m:02d}:{s:02d}] ({audio_origin})*: {src.get('text', '')[:100]}..."
+                        
+                        st.markdown(full_response)
+                        st.session_state.chat_history.append({"role": "assistant", "content": full_response})
+                    else:
+                        st.error(f"Erro na consulta RAG: {response.text}")
+                except Exception as e:
+                    st.error(f"Erro de conexão com o servidor RAG: {str(e)}")

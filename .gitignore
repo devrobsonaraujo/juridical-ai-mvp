@@ -1,0 +1,16 @@
+# Ambientes Virtuais
+venv/
+env/
+__pycache__/
+*.pyc
+
+# Banco de Dados Vetorial Local e Chunks temporários
+chroma_db/
+*.mp3
+*.wav
+*.m4a
+
+# Configurações sensíveis e logs
+.env
+.DS_Store
+*.log
