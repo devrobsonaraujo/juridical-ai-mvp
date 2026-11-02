@@ -1,5 +1,6 @@
 import streamlit as st
 import requests
+import os
 
 # Configuração inicial da página
 st.set_page_config(
@@ -18,10 +19,21 @@ footer {visibility: hidden;}
 </style>
 """, unsafe_allow_html=True)
 
-# URLs dos Endpoints do Backend
-BACKEND_AUDIO_URL = "http://127.0.0.1:8000/api/v1/audio/transcribe"
-BACKEND_HISTORY_URL = "http://127.0.0.1:8000/api/v1/audio/history"
-BACKEND_RAG_URL = "http://127.0.0.1:8000/api/v1/rag/query"
+# ---------------------------------------------------------
+# CONFIGURAÇÃO INTELIGENTE DE URL (LOCAL vs NUVEM)
+# ---------------------------------------------------------
+# Você pode definir a variável de ambiente BACKEND_URL no Render,
+# ou o sistema usará o Render por padrão se estiver em produção, 
+# alternando para localhost caso esteja rodando na sua máquina.
+DEFAULT_CLOUD_URL = "https://juridical-ai-mvp.onrender.com"
+BACKEND_BASE_URL = os.getenv("BACKEND_URL", DEFAULT_CLOUD_URL)
+
+# Se quiser forçar localmente para testes, basta descomentar a linha abaixo:
+# BACKEND_BASE_URL = "http://127.0.0.1:8000"
+
+BACKEND_AUDIO_URL = f"{BACKEND_BASE_URL}/api/v1/audio/transcribe"
+BACKEND_HISTORY_URL = f"{BACKEND_BASE_URL}/api/v1/audio/history"
+BACKEND_RAG_URL = f"{BACKEND_BASE_URL}/api/v1/rag/query"
 
 # Controle de Sessão
 if "authenticated" not in st.session_state:
@@ -57,6 +69,7 @@ with st.sidebar:
     st.image("https://img.icons8.com/color/96/scales.png", width=70)
     st.markdown("### Juridical AI")
     st.caption("Enterprise MVP • Segurança OAB")
+    st.markdown(f"🔗 **API Conectada:** `{BACKEND_BASE_URL}`")
     st.markdown("---")
     nav_opcao = st.radio("Selecione o Módulo", ["🎙️ Degravação & Busca", "📄 Extração & RAG Documental"], label_visibility="collapsed")
     st.markdown("---")
@@ -74,7 +87,6 @@ if nav_opcao == "🎙️ Degravação & Busca":
     col_a, col_b = st.columns(2)
     with col_a:
         st.markdown("### 1. Enviar Nova Gravação")
-        # Atualizado para aceitar extensões de vídeo e áudio
         uploaded_file = st.file_uploader(
             "Arraste o arquivo de vídeo ou áudio (MP4, MKV, AVI, MOV, MP3, WAV)", 
             type=["mp4", "mkv", "avi", "mov", "mp3", "wav", "m4a"]
@@ -86,7 +98,6 @@ if nav_opcao == "🎙️ Degravação & Busca":
             
             st.info(f"Arquivo carregado: {uploaded_file.name} ({uploaded_file.size / 1024 / 1024:.2f} MB)")
             
-            # Exibe player visual dependendo do tipo de mídia
             if is_video:
                 st.video(uploaded_file)
             else:
@@ -96,6 +107,7 @@ if nav_opcao == "🎙️ Degravação & Busca":
                 with st.spinner("Extraindo áudio (se vídeo), enviando para a IA e indexando no ChromaDB..."):
                     try:
                         files = {"file": (uploaded_file.name, uploaded_file.getvalue(), uploaded_file.type)}
+                        # Timeout estendido para arquivos longos na nuvem
                         response = requests.post(BACKEND_AUDIO_URL, files=files, timeout=600)
                         if response.status_code == 200:
                             st.session_state.transcription_result = response.json()
@@ -103,7 +115,7 @@ if nav_opcao == "🎙️ Degravação & Busca":
                         else:
                             st.error(f"Erro no servidor: {response.text}")
                     except Exception as e:
-                        st.error(f"Falha de conexão: {str(e)}")
+                        st.error(f"Falha de conexão com {BACKEND_AUDIO_URL}: {str(e)}")
 
         st.markdown("---")
         st.markdown("### 📚 Mídias Indexadas no Servidor")
@@ -113,7 +125,7 @@ if nav_opcao == "🎙️ Degravação & Busca":
                 for item in hist_res.json().get("history", []):
                     st.info(f"📁 **{item['filename']}** ({item['chunks_count']} blocos vetoriais)")
         except Exception:
-            st.caption("Histórico indisponível.")
+            st.caption("Histórico indisponível no momento.")
 
     with col_b:
         st.markdown("### 3. Transcrição Estruturada da Audiência")
@@ -132,7 +144,6 @@ else:
     st.markdown("# 📄 Copiloto Jurídico & RAG Documental")
     st.markdown("Consulte peças processuais e gravações de audiências indexadas com recuperação semântica vetorial.")
 
-    # Busca a lista de mídias disponíveis para filtro no chat
     audio_options = ["Todas as Mídias"]
     try:
         hist_res = requests.get(BACKEND_HISTORY_URL, timeout=5)
@@ -142,17 +153,14 @@ else:
     except Exception:
         pass
 
-    # Seletor organizado para escolher a fonte da consulta
     selected_audio = st.selectbox("🎯 Filtrar consulta por gravação específica:", audio_options)
 
     st.markdown("---")
 
-    # Exibe histórico do chat
     for message in st.session_state.chat_history:
         with st.chat_message(message["role"]):
             st.markdown(message["content"])
 
-    # Input do Chat
     if user_query := st.chat_input("Faça uma pergunta jurídica aos documentos ou gravações indexadas..."):
         st.session_state.chat_history.append({"role": "user", "content": user_query})
         with st.chat_message("user"):
