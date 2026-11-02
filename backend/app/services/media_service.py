@@ -1,6 +1,14 @@
 import os
 import tempfile
-from moviepy import VideoFileClip
+# Tenta a importação padrão e lida com variações de versão do moviepy
+try:
+    from moviepy.editor import VideoFileClip
+except ImportError:
+    try:
+        from moviepy import VideoFileClip
+    except ImportError:
+        # Fallback caso a estrutura mude na versão instalada
+        from moviepy.video.io.VideoFileClip import VideoFileClip
 
 def extract_audio_from_video(video_file_path: str) -> str:
     """
