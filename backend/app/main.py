@@ -30,3 +30,8 @@ def root():
         "status": "online",
         "docs": "/docs"
     }
+
+if __name__ == "__main__":
+    # Captura a porta da variável de ambiente do Render (padrão: 8000 se local)
+    port = int(os.environ.get("PORT", 8000))
+    uvicorn.run("app.main:app", host="0.0.0.0", port=port, reload=True)

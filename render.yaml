@@ -1,0 +1,11 @@
+services:
+  - type: web
+    name: juridical-ai-backend
+    env: python
+    region: oregon # ou ohio
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn backend.app.main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: GROQ_API_KEY
+        sync: false
