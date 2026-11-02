@@ -65,33 +65,48 @@ with st.sidebar:
         st.rerun()
 
 # ------------------------------------------
-# MÓDULO 1: DEGRAVAÇÃO & BUSCA
+# MÓDULO 1: DEGRAVAÇÃO & BUSCA DE VÍDEOS/ÁUDIOS
 # ------------------------------------------
 if nav_opcao == "🎙️ Degravação & Busca":
-    st.markdown("# ⚖️ Gestão e Degravação de Audiências")
-    st.markdown("Transcrição estenográfica automatizada com indexação vetorial e marcação temporal.")
+    st.markdown("# ⚖️ Gestão e Degravação de Audiências (Vídeo & Áudio)")
+    st.markdown("Transcrição estenográfica automatizada com extração de áudio de vídeos, indexação vetorial e marcação temporal.")
 
     col_a, col_b = st.columns(2)
     with col_a:
         st.markdown("### 1. Enviar Nova Gravação")
-        uploaded_file = st.file_uploader("Arraste o arquivo de áudio ou clique para selecionar (MP3, WAV, M4A)", type=["mp3", "wav", "m4a"])
+        # Atualizado para aceitar extensões de vídeo e áudio
+        uploaded_file = st.file_uploader(
+            "Arraste o arquivo de vídeo ou áudio (MP4, MKV, AVI, MOV, MP3, WAV)", 
+            type=["mp4", "mkv", "avi", "mov", "mp3", "wav", "m4a"]
+        )
+        
         if uploaded_file:
+            file_name_lower = uploaded_file.name.lower()
+            is_video = file_name_lower.endswith((".mp4", ".mkv", ".avi", ".mov", ".webm"))
+            
             st.info(f"Arquivo carregado: {uploaded_file.name} ({uploaded_file.size / 1024 / 1024:.2f} MB)")
-            if st.button("Processar e Transcrever Áudio", use_container_width=True):
-                with st.spinner("Enviando áudio para o motor de IA e indexando no ChromaDB..."):
+            
+            # Exibe player visual dependendo do tipo de mídia
+            if is_video:
+                st.video(uploaded_file)
+            else:
+                st.audio(uploaded_file)
+
+            if st.button("Processar Mídia e Transcrever", use_container_width=True):
+                with st.spinner("Extraindo áudio (se vídeo), enviando para a IA e indexando no ChromaDB..."):
                     try:
                         files = {"file": (uploaded_file.name, uploaded_file.getvalue(), uploaded_file.type)}
                         response = requests.post(BACKEND_AUDIO_URL, files=files, timeout=600)
                         if response.status_code == 200:
                             st.session_state.transcription_result = response.json()
-                            st.success("Áudio processado e indexado com sucesso no disco!")
+                            st.success("Mídia processada e indexada com sucesso no disco!")
                         else:
                             st.error(f"Erro no servidor: {response.text}")
                     except Exception as e:
                         st.error(f"Falha de conexão: {str(e)}")
 
         st.markdown("---")
-        st.markdown("### 📚 Áudios Indexados no Servidor")
+        st.markdown("### 📚 Mídias Indexadas no Servidor")
         try:
             hist_res = requests.get(BACKEND_HISTORY_URL, timeout=5)
             if hist_res.status_code == 200:
@@ -115,10 +130,10 @@ if nav_opcao == "🎙️ Degravação & Busca":
 # ------------------------------------------
 else:
     st.markdown("# 📄 Copiloto Jurídico & RAG Documental")
-    st.markdown("Consulte peças processuais e áudios indexados com recuperação semântica vetorial.")
+    st.markdown("Consulte peças processuais e gravações de audiências indexadas com recuperação semântica vetorial.")
 
-    # Busca a lista de áudios disponíveis para filtro no chat
-    audio_options = ["Todos os Áudios"]
+    # Busca a lista de mídias disponíveis para filtro no chat
+    audio_options = ["Todas as Mídias"]
     try:
         hist_res = requests.get(BACKEND_HISTORY_URL, timeout=5)
         if hist_res.status_code == 200:
@@ -138,7 +153,7 @@ else:
             st.markdown(message["content"])
 
     # Input do Chat
-    if user_query := st.chat_input("Faça uma pergunta jurídica aos documentos ou áudios indexados..."):
+    if user_query := st.chat_input("Faça uma pergunta jurídica aos documentos ou gravações indexadas..."):
         st.session_state.chat_history.append({"role": "user", "content": user_query})
         with st.chat_message("user"):
             st.markdown(user_query)
@@ -148,8 +163,8 @@ else:
                 try:
                     payload = {
                         "question": user_query, 
-                        "k": 4,
-                        "audio_filter": None if selected_audio == "Todos os Áudios" else selected_audio
+                        "k": 8,
+                        "audio_filter": None if selected_audio == "Todas as Mídias" else selected_audio
                     }
                     response = requests.post(BACKEND_RAG_URL, json=payload, timeout=60)
                     
@@ -162,7 +177,7 @@ else:
                         for src in sources:
                             start_sec = int(src.get("start", 0))
                             m, s = divmod(start_sec, 60)
-                            audio_origin = src.get('audio_filename', 'Áudio')
+                            audio_origin = src.get('audio_filename', 'Mídia')
                             full_response += f"\n- *[{m:02d}:{s:02d}] ({audio_origin})*: {src.get('text', '')[:100]}..."
                         
                         st.markdown(full_response)

@@ -1,59 +1,104 @@
 from chromadb import PersistentClient
-from openai import OpenAI
 from app.config import settings
 
-client = OpenAI(
-    api_key=settings.GROQ_API_KEY,
-    base_url="https://api.groq.com/openai/v1"
-)
-
+# Inicialização do Banco Vetorial ChromaDB com Persistência em Disco
 db_client = PersistentClient(path="./chroma_db")
 collection = db_client.get_or_create_collection(name="juridical_audio_index")
 
+def chunk_segments(segments: list, max_words: int = 150, overlap_words: int = 30) -> list:
+    """
+    Agrupa segmentos breves do Whisper em janelas de contexto maiores (Sliding Window),
+    preservando com exatidão o timestamp inicial (start) e final (end) do bloco.
+    Evita perda de contexto probatório em diálogos de audiências.
+    """
+    chunks = []
+    current_chunk_words = []
+    current_start = None
+    current_end = None
+
+    for seg in segments:
+        text = seg.get("text", "").strip()
+        if not text:
+            continue
+
+        words = text.split()
+        if current_start is None:
+            current_start = float(seg.get("start", 0.0))
+
+        current_end = float(seg.get("end", 0.0))
+        current_chunk_words.extend(words)
+
+        # Se atingir o limite de palavras por janela, consolida o chunk
+        if len(current_chunk_words) >= max_words:
+            chunk_text = " ".join(current_chunk_words)
+            chunks.append({
+                "text": chunk_text,
+                "start": current_start,
+                "end": current_end
+            })
+            
+            # Aplica sobreposição (overlap) para manter a continuidade semântica
+            overlap_text = current_chunk_words[-overlap_words:] if len(current_chunk_words) > overlap_words else []
+            current_chunk_words = overlap_text
+            current_start = current_end
+
+    # Adiciona o último bloco remanescente, se existir
+    if current_chunk_words:
+        chunks.append({
+            "text": " ".join(current_chunk_words),
+            "start": current_start,
+            "end": current_end
+        })
+
+    return chunks
+
 def index_transcript_segments(audio_filename: str, segments: list) -> dict:
     """
-    Indexa os segmentos da transcrição (com timestamps) no ChromaDB.
-    Nome padronizado para atender à chamada do audio_router.
+    Processa os segmentos do Whisper via janelas deslizantes e indexa os chunks no ChromaDB.
     """
+    # Realiza o chunking contextualizado
+    contextual_chunks = chunk_segments(segments, max_words=120, overlap_words=25)
+
     documents = []
     metadatas = []
     ids = []
-    
-    for idx, seg in enumerate(segments):
-        doc_text = seg.get("text", "")
-        if not doc_text.strip():
-            continue
-            
-        documents.append(doc_text)
+
+    for idx, chunk in enumerate(contextual_chunks):
+        documents.append(chunk["text"])
         metadatas.append({
             "audio_filename": audio_filename,
-            "start": float(seg.get("start", 0.0)),
-            "end": float(seg.get("end", 0.0))
+            "start": float(chunk["start"]),
+            "end": float(chunk["end"])
         })
-        ids.append(f"{audio_filename}_seg_{idx}")
-        
+        ids.append(f"{audio_filename}_chunk_{idx}")
+
     if documents:
         collection.add(
             documents=documents,
             metadatas=metadatas,
             ids=ids
         )
-        
+
     return {
         "status": "indexado",
         "chunks_count": len(documents)
     }
 
-def search_audio_context(query: str, n_results: int = 4, audio_filter: str = None):
-    """Realiza busca semântica na base de áudios indexados, com opção de filtro por arquivo."""
-    where_clause = {"audio_filename": audio_filter} if audio_filter and audio_filter != "Todos os Áudios" else None
-    
+def search_audio_context(query: str, n_results: int = 6, audio_filter: str = None) -> list:
+    """
+    Busca semântica no ChromaDB filtrada por arquivo (opcional).
+    Retorna os blocos vetoriais mais relevantes com seus timestamps.
+    """
+    where_clause = None
+    if audio_filter and audio_filter not in ["Todos os Áudios", "Todas as Mídias"]:
+        where_clause = {"audio_filename": audio_filter}
+
     results = collection.query(
         query_texts=[query],
         n_results=n_results,
         where=where_clause
     )
-    
+
     formatted_results = []
     if results and "documents" in results and results["documents"]:
         docs = results["documents"][0]
@@ -61,73 +106,28 @@ def search_audio_context(query: str, n_results: int = 4, audio_filter: str = Non
         for doc, meta in zip(docs, metas):
             formatted_results.append({
                 "text": doc,
-                "start": meta["start"],
-                "end": meta["end"],
-                "audio_filename": meta["audio_filename"]
+                "start": meta.get("start", 0.0),
+                "end": meta.get("end", 0.0),
+                "audio_filename": meta.get("audio_filename", "Mídia")
             })
-            
+
     return formatted_results
 
-def query_rag_audio(question: str, k: int = 4, audio_filter: str = None) -> dict:
-    """Executa a busca RAG considerando o filtro opcional de áudio."""
-    context_segments = search_audio_context(query=question, n_results=k, audio_filter=audio_filter)
-    
-    context_text = "\n".join([
-        f"[{int(s['start']//60):02d}:{int(s['start']%60):02d}] ({s['audio_filename']}): {s['text']}" 
-        for s in context_segments
-    ])
-    
-    prompt = f"""
-    Com base estritamente nos trechos da audiência judicial abaixo, responda à pergunta formulada indicando os timestamps e o arquivo de origem.
-    
-    Trechos das Audiências:
-    {context_text}
-    
-    Pergunta: {question}
+def get_indexed_audio_history() -> list:
     """
-    
-    response = client.chat.completions.create(
-        model="llama-3.3-70b-versatile",
-        messages=[{"role": "user", "content": prompt}],
-        temperature=0.1
-    )
-    
-    answer = response.choices[0].message.content
-    
-    return {
-        "answer": answer,
-        "sources": context_segments
-    }
+    Retorna a lista de arquivos já indexados na base vetorial e o total de blocos por arquivo.
+    """
+    try:
+        all_data = collection.get(include=["metadatas"])
+        metadatas = all_data.get("metadatas", [])
+        
+        file_counts = {}
+        for meta in metadatas:
+            filename = meta.get("audio_filename")
+            if filename:
+                file_counts[filename] = file_counts.get(filename, 0) + 1
 
-def query_rag_audio(question: str, k: int = 4, audio_filter: str = None) -> dict:
-    """
-    Executa a busca RAG considerando o filtro opcional de áudio.
-    """
-    context_segments = search_audio_context(query=question, n_results=k, audio_filter=audio_filter)
-    
-    context_text = "\n".join([
-        f"[{int(s['start']//60):02d}:{int(s['start']%60):02d}] ({s['audio_filename']}): {s['text']}" 
-        for s in context_segments
-    ])
-    
-    prompt = f"""
-    Com base estritamente nos trechos da audiência judicial abaixo, responda à pergunta formulada indicando os timestamps e o arquivo de origem.
-    
-    Trechos das Audiências:
-    {context_text}
-    
-    Pergunta: {question}
-    """
-    
-    response = client.chat.completions.create(
-        model="openai/gpt-oss-120b",  # Modelo verificado diretamente no seu painel da Groq
-        messages=[{"role": "user", "content": prompt}],
-        temperature=0.1
-    )
-    
-    answer = response.choices[0].message.content
-    
-    return {
-        "answer": answer,
-        "sources": context_segments
-    }
+        history = [{"filename": fname, "chunks_count": count} for fname, count in file_counts.items()]
+        return history
+    except Exception:
+        return []
