@@ -1,27 +1,46 @@
-import os
-from groq import Groq
-from app.config import settings
+
+from app.ai.factory import get_ai_provider
 from app.services.vector_service import search_audio_context
 
-def query_rag_engine(question: str, k: int = 6, audio_filter: str = None) -> dict:
+
+def query_rag_engine(
+    question: str,
+    k: int = 6,
+    audio_filter: str | None = None
+) -> dict:
     """
     Serviço analítico de RAG focado em apuração probatória jurídica.
+
+    Responsabilidades:
+    1. Recuperar trechos relevantes do ChromaDB.
+    2. Construir o contexto com timestamps.
+    3. Preparar os prompts jurídicos.
+    4. Delegar a geração da resposta ao provedor de IA.
+    5. Retornar a resposta e suas fontes.
     """
-    client = Groq(api_key=settings.GROQ_API_KEY)
 
-    # 1. Busca os blocos contextualizados via janela deslizante do vector_service
-    context_segments = search_audio_context(query=question, n_results=k, audio_filter=audio_filter)
+    # 1. Recupera os trechos contextualizados
+    context_segments = search_audio_context(
+        query=question,
+        n_results=k,
+        audio_filter=audio_filter
+    )
 
-    # 2. Formata o contexto preservando relógio temporal [MM:SS]
+    # 2. Formata o contexto preservando timestamps [MM:SS]
     context_chunks = []
-    for s in context_segments:
-        start_sec = int(s["start"])
-        m, sec = divmod(start_sec, 60)
-        context_chunks.append(f"[{m:02d}:{sec:02d} - {s['audio_filename']}]: {s['text']}")
+
+    for segment in context_segments:
+        start_sec = int(segment["start"])
+        minutes, seconds = divmod(start_sec, 60)
+
+        context_chunks.append(
+            f"[{minutes:02d}:{seconds:02d} - "
+            f"{segment['audio_filename']}]: {segment['text']}"
+        )
 
     context_str = "\n\n".join(context_chunks)
 
-    # 3. Prompt do Sistema de Alta Rigidez Probatória
+    # 3. Prompt jurídico original - preservado
     system_prompt = """Você é um Assessor Jurídico Sênior especialista na análise de depoimentos e audiências judiciais.
 Sua função é responder pontualmente à indagação formulada usando EXCLUSIVAMENTE os fatos relatados nos trechos recuperados.
 
@@ -40,17 +59,16 @@ PERGUNTA DO ADVOGADO/MAGISTRADO:
 
 Responda de forma direta e técnica:"""
 
-    completion = client.chat.completions.create(
-        model="openai/gpt-oss-120b",  # Ou "llama-3.3-70b-versatile"
-        messages=[
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_prompt}
-        ],
-        temperature=0.1,
-        max_tokens=1500
+    # 4. Geração de resposta pelo provedor configurado
+    provider = get_ai_provider()
+
+    answer = provider.generate(
+        system_prompt=system_prompt,
+        user_prompt=user_prompt
     )
 
+    # 5. Retorna o contrato esperado pelo frontend
     return {
-        "answer": completion.choices[0].message.content,
+        "answer": answer,
         "sources": context_segments
     }
