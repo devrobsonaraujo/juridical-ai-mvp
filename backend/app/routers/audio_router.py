@@ -1,98 +1,196 @@
+
 import os
 import shutil
-from fastapi import APIRouter, UploadFile, File, HTTPException
-from app.config import settings
-from app.services.transcription_service import transcribe_audio_file
-from app.services.vector_service import index_transcript_segments
-from app.services.media_service import extract_audio_from_video
+import uuid
+from pathlib import Path
 
-router = APIRouter(prefix="/api/v1/audio", tags=["Mídia e Transcrição"])
+from fastapi import (
+    APIRouter,
+    Depends,
+    File,
+    HTTPException,
+    UploadFile,
+)
+
+from app.config import settings
+from app.security import CurrentUser, get_current_user
+from app.services.media_service import extract_audio_from_video
+from app.services.transcription_service import transcribe_audio_file
+from app.services.storage_service import (
+    get_indexed_audio_history,
+    index_transcript_segments,
+)
+
+
+router = APIRouter(
+    prefix="/api/v1/audio",
+    tags=["Mídia e Transcrição"],
+)
+
+ALLOWED_EXTENSIONS = {
+    ".mp3",
+    ".wav",
+    ".m4a",
+    ".mp4",
+    ".mpeg",
+    ".mpga",
+    ".webm",
+    ".mkv",
+    ".avi",
+    ".mov",
+}
+
+VIDEO_EXTENSIONS = {
+    ".mp4",
+    ".mkv",
+    ".avi",
+    ".mov",
+    ".webm",
+}
+
 
 @router.post("/transcribe")
-async def transcribe_and_index_audio(file: UploadFile = File(...)):
+async def transcribe_and_index_audio(
+    file: UploadFile = File(...),
+    current_user: CurrentUser = Depends(
+        get_current_user
+    ),
+):
     """
-    Recebe um arquivo de áudio ou vídeo, extrai o áudio se necessário,
-    realiza a transcrição via Whisper (com suporte a timestamps)
-    e indexa os segmentos no ChromaDB.
+    Transcreve e indexa uma mídia para o advogado
+    autenticado, com proprietário obrigatório.
+
+    O armazenamento é selecionado pelo storage_service.
     """
-    allowed_extensions = [
-        ".mp3", ".wav", ".m4a", ".mp4", ".mpeg", 
-        ".mpga", ".webm", ".mkv", ".avi", ".mov"
-    ]
-    file_ext = os.path.splitext(file.filename)[1].lower()
-    
-    if file_ext not in allowed_extensions:
+    original_filename = Path(
+        (file.filename or "").replace("\\", "/")
+    ).name
+
+    file_ext = Path(
+        original_filename
+    ).suffix.lower()
+
+    if file_ext not in ALLOWED_EXTENSIONS:
         raise HTTPException(
-            status_code=400, 
-            detail=f"Formato de arquivo não suportado. Use um dos seguintes: {allowed_extensions}"
+            status_code=400,
+            detail=(
+                "Formato de arquivo não suportado. "
+                "Extensões permitidas: "
+                f"{', '.join(sorted(ALLOWED_EXTENSIONS))}"
+            ),
         )
 
-    # Garante que o diretório temporário existe
-    os.makedirs(settings.TEMP_DIR, exist_ok=True)
-    temp_file_path = os.path.join(settings.TEMP_DIR, file.filename)
+    os.makedirs(
+        settings.TEMP_DIR,
+        exist_ok=True,
+    )
+
+    temp_filename = (
+        f"{uuid.uuid4().hex}{file_ext}"
+    )
+
+    temp_file_path = os.path.join(
+        settings.TEMP_DIR,
+        temp_filename,
+    )
+
     audio_path_to_process = temp_file_path
 
     try:
-        # Salva o arquivo enviado temporariamente na pasta temp/
-        with open(temp_file_path, "wb") as buffer:
-            shutil.copyfileobj(file.file, buffer)
-        
-        print(f"Arquivo recebido e salvo em: {temp_file_path}")
+        with open(
+            temp_file_path,
+            "wb",
+        ) as buffer:
+            shutil.copyfileobj(
+                file.file,
+                buffer,
+            )
 
-        # Se for um arquivo de vídeo, extrai o áudio primeiro usando ffmpeg/moviepy
-        video_extensions = [".mp4", ".mkv", ".avi", ".mov", ".webm"]
-        if file_ext in video_extensions:
-            print("Arquivo de vídeo detectado. Extraindo faixa de áudio...")
-            audio_path_to_process = extract_audio_from_video(temp_file_path)
+        if file_ext in VIDEO_EXTENSIONS:
+            audio_path_to_process = (
+                extract_audio_from_video(
+                    temp_file_path
+                )
+            )
 
-        # 1. Executa a transcrição com preservação de timestamps
-        transcript_result = transcribe_audio_file(audio_path_to_process)
+        transcript_result = transcribe_audio_file(
+            audio_path_to_process
+        )
 
-        # 2. Indexa automaticamente os segmentos no banco vetorial (ChromaDB)
         indexing_result = index_transcript_segments(
-            audio_filename=file.filename,
-            segments=transcript_result["segments"]
+            audio_filename=original_filename,
+            segments=transcript_result["segments"],
+            owner_user_id=current_user.id,
         )
 
         return {
-            "filename": file.filename,
+            "filename": original_filename,
             "status": "sucesso",
             "full_text": transcript_result["full_text"],
-            "segments_count": len(transcript_result["segments"]),
-            "indexing": indexing_result
+            "segments_count": len(
+                transcript_result["segments"]
+            ),
+            "indexing": indexing_result,
         }
 
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Erro interno no processamento da mídia: {str(e)}")
-    
+    except HTTPException:
+        raise
+
+    except Exception as exc:
+        print(
+            "Erro ao processar mídia "
+            f"do usuário {current_user.id}: "
+            f"{type(exc).__name__}"
+        )
+
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                "Erro interno no processamento da mídia."
+            ),
+        ) from exc
+
     finally:
-        # Remove os arquivos temporários originais e convertidos para poupar espaço em disco
-        if os.path.exists(temp_file_path):
-            os.remove(temp_file_path)
-        if audio_path_to_process != temp_file_path and os.path.exists(audio_path_to_process):
-            os.remove(audio_path_to_process)
+        await file.close()
+
+        for path in {
+            temp_file_path,
+            audio_path_to_process,
+        }:
+            if os.path.isfile(path):
+                os.remove(path)
+
 
 @router.get("/history")
-async def get_indexed_history():
+async def get_indexed_history(
+    current_user: CurrentUser = Depends(
+        get_current_user
+    ),
+):
     """
-    Retorna um resumo dos áudios/vídeos e segmentos já indexados no ChromaDB.
+    Retorna somente as mídias do advogado autenticado,
+    utilizando o armazenamento configurado.
     """
     try:
-        from app.services.vector_service import collection
-        data = collection.get(include=["metadatas", "documents"])
-        
-        history_map = {}
-        if data and "metadatas" in data and data["metadatas"]:
-            for meta, doc in zip(data["metadatas"], data["documents"]):
-                audio_name = meta.get("audio_filename", "Mídia Desconhecida")
-                if audio_name not in history_map:
-                    history_map[audio_name] = {"chunks_count": 0, "preview": doc[:100]}
-                history_map[audio_name]["chunks_count"] += 1
+        history = get_indexed_audio_history(
+            owner_user_id=current_user.id
+        )
 
-        formatted_history = [
-            {"filename": name, **info} for name, info in history_map.items()
-        ]
-        
-        return {"status": "sucesso", "history": formatted_history}
-    except Exception as e:
-        return {"status": "erro", "history": [], "detail": str(e)}
+        return {
+            "status": "sucesso",
+            "history": history,
+        }
+
+    except Exception as exc:
+        print(
+            "Erro ao consultar histórico "
+            f"do usuário {current_user.id}: "
+            f"{type(exc).__name__}"
+        )
+
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                "Não foi possível consultar o histórico."
+            ),
+        ) from exc

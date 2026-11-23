@@ -1,46 +1,64 @@
 
 from app.ai.factory import get_ai_provider
-from app.services.vector_service import search_audio_context
+from app.services.storage_service import search_audio_context
 
 
 def query_rag_engine(
     question: str,
     k: int = 6,
-    audio_filter: str | None = None
+    audio_filter: str | None = None,
+    owner_user_id: str | None = None,
 ) -> dict:
     """
-    Serviço analítico de RAG focado em apuração probatória jurídica.
+    Serviço analítico de RAG para apuração probatória.
 
-    Responsabilidades:
-    1. Recuperar trechos relevantes do ChromaDB.
-    2. Construir o contexto com timestamps.
-    3. Preparar os prompts jurídicos.
-    4. Delegar a geração da resposta ao provedor de IA.
-    5. Retornar a resposta e suas fontes.
+    Todas as buscas são limitadas ao advogado
+    autenticado.
+
+    O armazenamento é selecionado pelo storage_service.
     """
+    if not owner_user_id:
+        raise ValueError(
+            "O proprietário é obrigatório para consultas RAG."
+        )
 
-    # 1. Recupera os trechos contextualizados
+    # 1. Recuperação com isolamento obrigatório
     context_segments = search_audio_context(
         query=question,
         n_results=k,
-        audio_filter=audio_filter
+        audio_filter=audio_filter,
+        owner_user_id=owner_user_id,
     )
 
-    # 2. Formata o contexto preservando timestamps [MM:SS]
+    # Não chamar o modelo quando não houver fontes.
+    if not context_segments:
+        return {
+            "answer": (
+                "A informação não consta nos trechos "
+                "recuperados desta audiência."
+            ),
+            "sources": [],
+        }
+
+    # 2. Contexto com timestamps
     context_chunks = []
 
     for segment in context_segments:
         start_sec = int(segment["start"])
-        minutes, seconds = divmod(start_sec, 60)
+        minutes, seconds = divmod(
+            start_sec,
+            60,
+        )
 
         context_chunks.append(
             f"[{minutes:02d}:{seconds:02d} - "
-            f"{segment['audio_filename']}]: {segment['text']}"
+            f"{segment['audio_filename']}]: "
+            f"{segment['text']}"
         )
 
     context_str = "\n\n".join(context_chunks)
 
-    # 3. Prompt jurídico original - preservado
+    # 3. Prompt jurídico original preservado
     system_prompt = """Você é um Assessor Jurídico Sênior especialista na análise de depoimentos e audiências judiciais.
 Sua função é responder pontualmente à indagação formulada usando EXCLUSIVAMENTE os fatos relatados nos trechos recuperados.
 
@@ -59,16 +77,16 @@ PERGUNTA DO ADVOGADO/MAGISTRADO:
 
 Responda de forma direta e técnica:"""
 
-    # 4. Geração de resposta pelo provedor configurado
+    # 4. Geração pelo provedor configurado
     provider = get_ai_provider()
 
     answer = provider.generate(
         system_prompt=system_prompt,
-        user_prompt=user_prompt
+        user_prompt=user_prompt,
     )
 
-    # 5. Retorna o contrato esperado pelo frontend
+    # 5. Contrato preservado para o React
     return {
         "answer": answer,
-        "sources": context_segments
+        "sources": context_segments,
     }

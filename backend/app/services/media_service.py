@@ -1,37 +1,79 @@
+
 import os
+import shutil
+import subprocess
 import tempfile
-# Tenta a importação padrão e lida com variações de versão do moviepy
-try:
-    from moviepy.editor import VideoFileClip
-except ImportError:
-    try:
-        from moviepy import VideoFileClip
-    except ImportError:
-        # Fallback caso a estrutura mude na versão instalada
-        from moviepy.video.io.VideoFileClip import VideoFileClip
+from pathlib import Path
+
 
 def extract_audio_from_video(video_file_path: str) -> str:
     """
-    Extrai a faixa de áudio de um arquivo de vídeo e salva como MP3 temporário.
-    Compatível com moviepy v1.x e v2.x+.
-    Retorna o caminho do arquivo de áudio gerado.
+    Extrai o áudio de um vídeo utilizando FFmpeg.
+
+    O áudio é convertido para MP3 mono, 16 kHz,
+    com bitrate de 64 kbps.
+
+    Retorna o caminho do arquivo temporário gerado.
+
+    O chamador é responsável por remover esse arquivo
+    após a transcrição.
     """
-    audio_output_path = tempfile.NamedTemporaryFile(delete=False, suffix=".mp3").name
-    
-    try:
-        video_clip = VideoFileClip(video_file_path)
-        if video_clip.audio is None:
-            raise ValueError("O arquivo de vídeo fornecido não possui faixa de áudio.")
-        
-        # Extrai o áudio com qualidade otimizada para transcrição no Whisper
-        video_clip.audio.write_audiofile(
-            audio_output_path, 
-            bitrate='64k',
-            logger=None
+
+    video_path = Path(video_file_path)
+
+    if not video_path.is_file():
+        raise FileNotFoundError(
+            "O arquivo de vídeo não foi encontrado."
         )
-        video_clip.close()
+
+    if shutil.which("ffmpeg") is None:
+        raise RuntimeError(
+            "FFmpeg não encontrado no PATH."
+        )
+
+    fd, audio_output_path = tempfile.mkstemp(
+        suffix=".mp3"
+    )
+    os.close(fd)
+
+    try:
+        command = [
+            "ffmpeg",
+            "-hide_banner",
+            "-loglevel", "error",
+            "-y",
+            "-i", str(video_path),
+            "-vn",
+            "-ac", "1",
+            "-ar", "16000",
+            "-b:a", "64k",
+            audio_output_path,
+        ]
+
+        result = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+        if result.returncode != 0:
+            raise RuntimeError(
+                "FFmpeg não conseguiu extrair o áudio."
+            )
+
+        if (
+            not os.path.isfile(audio_output_path)
+            or os.path.getsize(audio_output_path) == 0
+        ):
+            raise RuntimeError(
+                "A extração gerou um arquivo de áudio vazio."
+            )
+
         return audio_output_path
-    except Exception as e:
-        if os.path.exists(audio_output_path):
+
+    except Exception:
+        if os.path.isfile(audio_output_path):
             os.remove(audio_output_path)
-        raise RuntimeError(f"Erro ao extrair áudio do vídeo: {str(e)}")
+
+        raise

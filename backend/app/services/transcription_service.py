@@ -1,99 +1,269 @@
-import os
+
 import math
-from pydub import AudioSegment
+import os
+import shutil
+import subprocess
+import tempfile
+from pathlib import Path
+
 from openai import OpenAI
+
 from app.config import settings
 
-# Inicialização do cliente com a Groq
+
 client = OpenAI(
     api_key=settings.GROQ_API_KEY,
-    base_url="https://api.groq.com/openai/v1"
+    base_url="https://api.groq.com/openai/v1",
+    timeout=180.0,
+    max_retries=2,
 )
 
-MAX_FILE_SIZE_MB = 24  # Margem de segurança abaixo de 25MB
+MAX_FILE_SIZE_MB = 24
+
 
 def get_file_size_mb(file_path: str) -> float:
-    """Retorna o tamanho do arquivo em MB."""
+    """Retorna o tamanho do arquivo em MiB."""
     return os.path.getsize(file_path) / (1024 * 1024)
 
-def split_audio_file(file_path: str, chunk_length_minutes: int = 10) -> list[dict]:
+
+def _run_ffmpeg(command: list[str]) -> None:
+    if shutil.which("ffmpeg") is None:
+        raise RuntimeError(
+            "FFmpeg não encontrado no PATH."
+        )
+
+    result = subprocess.run(
+        command,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    if result.returncode != 0:
+        raise RuntimeError(
+            "Falha ao processar áudio com FFmpeg."
+        )
+
+
+def _get_audio_duration(file_path: str) -> float:
+    if shutil.which("ffprobe") is None:
+        raise RuntimeError(
+            "FFprobe não encontrado no PATH."
+        )
+
+    result = subprocess.run(
+        [
+            "ffprobe",
+            "-v", "error",
+            "-show_entries", "format=duration",
+            "-of", "default=noprint_wrappers=1:nokey=1",
+            file_path,
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    if result.returncode != 0:
+        raise RuntimeError(
+            "Não foi possível identificar a duração do áudio."
+        )
+
+    try:
+        duration = float(result.stdout.strip())
+    except ValueError as exc:
+        raise RuntimeError(
+            "Duração de áudio inválida."
+        ) from exc
+
+    if not math.isfinite(duration) or duration <= 0:
+        raise RuntimeError(
+            "O áudio possui duração inválida."
+        )
+
+    return duration
+
+
+def split_audio_file(
+    file_path: str,
+    chunk_length_minutes: int = 10,
+) -> list[dict]:
     """
-    Divide um arquivo de áudio pesado em partes menores.
-    Retorna uma lista de dicionários contendo o caminho do chunk e o tempo inicial de deslocamento (offset).
+    Divide o áudio em arquivos MP3 temporários.
+
+    Não carrega a mídia inteira na memória.
+
+    Retorna:
+    [
+        {"path": "...", "offset": 0.0},
+        {"path": "...", "offset": 600.0},
+    ]
+
+    O chamador deve remover os arquivos gerados.
     """
-    audio = AudioSegment.from_file(file_path)
-    chunk_length_ms = chunk_length_minutes * 60 * 1000  
-    total_chunks = math.ceil(len(audio) / chunk_length_ms)
-    
+    if chunk_length_minutes < 1:
+        raise ValueError(
+            "A duração dos chunks deve ser positiva."
+        )
+
+    duration = _get_audio_duration(file_path)
+    chunk_seconds = chunk_length_minutes * 60
+    total_chunks = math.ceil(duration / chunk_seconds)
+
     chunks_info = []
-    base_name, ext = os.path.splitext(file_path)
 
-    for i in range(total_chunks):
-        start_ms = i * chunk_length_ms
-        end_ms = min((i + 1) * chunk_length_ms, len(audio))
-        
-        chunk_audio = audio[start_ms:end_ms]
-        chunk_filename = f"{base_name}_part_{i}{ext}"
-        
-        chunk_audio.export(chunk_filename, format=ext.replace(".", ""))
-        offset_seconds = start_ms / 1000.0
-        
-        chunks_info.append({
-            "path": chunk_filename,
-            "offset": offset_seconds
-        })
+    try:
+        for index in range(total_chunks):
+            offset = index * chunk_seconds
+            remaining = duration - offset
 
-    return chunks_info
+            if remaining <= 0:
+                break
+
+            current_duration = min(
+                chunk_seconds,
+                remaining,
+            )
+
+            fd, chunk_path = tempfile.mkstemp(
+                suffix=".mp3"
+            )
+            os.close(fd)
+
+            chunks_info.append({
+                "path": chunk_path,
+                "offset": float(offset),
+            })
+
+            _run_ffmpeg([
+                "ffmpeg",
+                "-hide_banner",
+                "-loglevel", "error",
+                "-y",
+                "-ss", str(offset),
+                "-i", file_path,
+                "-t", str(current_duration),
+                "-vn",
+                "-ac", "1",
+                "-ar", "16000",
+                "-b:a", "64k",
+                chunk_path,
+            ])
+
+            if os.path.getsize(chunk_path) == 0:
+                raise RuntimeError(
+                    "O FFmpeg gerou um chunk vazio."
+                )
+
+            if get_file_size_mb(chunk_path) > MAX_FILE_SIZE_MB:
+                raise RuntimeError(
+                    "Um chunk ultrapassou o limite "
+                    "de tamanho para transcrição."
+                )
+
+        return chunks_info
+
+    except Exception:
+        for chunk in chunks_info:
+            path = chunk["path"]
+
+            if os.path.exists(path):
+                os.remove(path)
+
+        raise
+
 
 def transcribe_audio_file(file_path: str) -> dict:
     """
-    Processa arquivos de áudio de qualquer tamanho utilizando o objeto correto do Whisper.
+    Transcreve um áudio usando Groq Whisper.
+
+    Preserva o contrato:
+    {
+        "full_text": str,
+        "segments": [
+            {
+                "start": float,
+                "end": float,
+                "text": str,
+            }
+        ]
+    }
     """
+    if not os.path.isfile(file_path):
+        raise FileNotFoundError(
+            "Arquivo de áudio não encontrado."
+        )
+
     file_size = get_file_size_mb(file_path)
+
+    if file_size <= MAX_FILE_SIZE_MB:
+        chunks_to_process = [{
+            "path": file_path,
+            "offset": 0.0,
+        }]
+    else:
+        chunks_to_process = split_audio_file(
+            file_path,
+            chunk_length_minutes=10,
+        )
+
     unified_segments = []
     full_text_parts = []
 
-    if file_size <= MAX_FILE_SIZE_MB:
-        chunks_to_process = [{"path": file_path, "offset": 0.0}]
-    else:
-        print(f"Áudio grande detectado ({file_size:.2f}MB). Iniciando fatiamento...")
-        chunks_to_process = split_audio_file(file_path, chunk_length_minutes=10)
+    try:
+        for chunk in chunks_to_process:
+            chunk_path = chunk["path"]
+            time_offset = chunk["offset"]
 
-    for chunk in chunks_to_process:
-        chunk_path = chunk["path"]
-        time_offset = chunk["offset"]
+            with open(chunk_path, "rb") as audio_file:
+                response = client.audio.transcriptions.create(
+                    model="whisper-large-v3",
+                    file=audio_file,
+                    response_format="verbose_json",
+                    language="pt",
+                )
 
-        with open(chunk_path, "rb") as audio_file:
-            response = client.audio.transcriptions.create(
-                model="whisper-large-v3",
-                file=audio_file,
-                response_format="verbose_json",
-                language="pt"
-            )
+            segments = getattr(
+                response,
+                "segments",
+                None,
+            ) or []
 
-            # Extrai os segmentos acessando como atributos do objeto
-            segments = getattr(response, "segments", [])
-            for seg in segments:
-                # O objeto TranscriptionSegment usa atributos (seg.start, seg.end, seg.text)
-                seg_start = getattr(seg, "start", 0.0)
-                seg_end = getattr(seg, "end", 0.0)
-                seg_text = getattr(seg, "text", "").strip()
+            for segment in segments:
+                text = (
+                    getattr(segment, "text", "") or ""
+                ).strip()
 
-                real_start = seg_start + time_offset
-                real_end = seg_end + time_offset
+                if not text:
+                    continue
+
+                start = float(
+                    getattr(segment, "start", 0.0)
+                ) + time_offset
+
+                end = float(
+                    getattr(segment, "end", 0.0)
+                ) + time_offset
 
                 unified_segments.append({
-                    "start": real_start,
-                    "end": real_end,
-                    "text": seg_text
+                    "start": start,
+                    "end": end,
+                    "text": text,
                 })
-                full_text_parts.append(seg_text)
 
-        # Remove o chunk temporário se foi criado pelo fatiamento
-        if chunk_path != file_path and os.path.exists(chunk_path):
-            os.remove(chunk_path)
+                full_text_parts.append(text)
 
-    return {
-        "full_text": " ".join(full_text_parts),
-        "segments": unified_segments
-    }
+        return {
+            "full_text": " ".join(full_text_parts),
+            "segments": unified_segments,
+        }
+
+    finally:
+        for chunk in chunks_to_process:
+            chunk_path = chunk["path"]
+
+            if chunk_path == file_path:
+                continue
+
+            if os.path.isfile(chunk_path):
+                os.remove(chunk_path)

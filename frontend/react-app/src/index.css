@@ -1,0 +1,76 @@
+@import "tailwindcss";
+@theme { --font-sans: Inter, ui-sans-serif, system-ui, sans-serif; }
+:root { --bg:#f5f7fb; --surface:#ffffff; --surface-soft:#f0f4fa; --text:#101b32; --muted:#65758f; --border:#e1e8f2; --accent:#2563eb; --accent-hover:#1d4ed8; --primary:#14213b; --primary-hover:#263956; --ring:#bfdbfe; color-scheme:light; }
+:root[data-theme="dark"] { --bg:#0b1220; --surface:#121e31; --surface-soft:#19283e; --text:#edf3ff; --muted:#a5b4cc; --border:#2b3b53; --accent:#7da9ff; --accent-hover:#a3c2ff; --primary:#315ed7; --primary-hover:#4675ef; --ring:#31559a; color-scheme:dark; }
+@layer base { html { background:var(--bg); } body { margin:0; background:var(--bg); color:var(--text); @apply antialiased; } button { @apply cursor-pointer; } button:disabled { @apply cursor-not-allowed opacity-60; } * { box-sizing:border-box; } :focus-visible { outline:2px solid var(--accent); outline-offset:3px; } }
+@layer components {
+ .app-shell,.login-screen { background:var(--bg); color:var(--text); }
+ .app-sidebar,.app-topbar { background:var(--surface); border-color:var(--border); }
+ .brand-icon { background:#15223b; color:#fff; }
+ .nav-item { color:var(--muted); transition:background .15s,color .15s; }
+ .nav-item:hover { background:var(--surface-soft); color:var(--text); }
+ .nav-active,.nav-active:hover { background:var(--primary); color:#fff; }
+ .soft-card { background:var(--surface-soft); color:var(--text); }
+ .icon-button { @apply inline-flex h-10 w-10 items-center justify-center rounded-xl; color:var(--text); }
+ .icon-button:hover { background:var(--surface-soft); }
+ .panel { @apply rounded-2xl border p-5 shadow-sm md:p-6; background:var(--surface); border-color:var(--border); box-shadow:0 8px 30px rgba(5,15,35,.04); }
+ .page-title { @apply text-3xl font-bold tracking-tight md:text-4xl; color:var(--text); }
+ .section-title { @apply text-lg font-semibold tracking-tight; color:var(--text); }
+ .muted { @apply text-sm leading-6; color:var(--muted); }
+ .eyebrow { @apply mb-2 text-xs font-semibold tracking-widest; color:var(--accent); }
+ .label { @apply mb-2 block text-sm font-semibold; color:var(--text); }
+ .field { @apply w-full min-w-0 rounded-xl border px-4 py-3 text-sm outline-none; background:var(--surface); border-color:var(--border); color:var(--text); }
+ .field:focus { border-color:var(--accent); box-shadow:0 0 0 3px var(--ring); }
+ .field::placeholder { color:var(--muted); }
+ .btn-primary { @apply inline-flex items-center justify-center gap-2 rounded-xl px-5 py-3 text-sm font-semibold text-white transition-colors; background:var(--primary); }
+ .btn-primary:hover { background:var(--primary-hover); }
+ .btn-secondary { @apply inline-flex items-center justify-center gap-2 rounded-lg border px-3 py-2 text-xs font-medium; background:var(--surface); border-color:var(--border); color:var(--text); }
+ .btn-secondary:hover { background:var(--surface-soft); }
+ .markdown p { @apply mb-2 last:mb-0; } .markdown ul { @apply my-2 list-disc pl-5; } .markdown ol { @apply my-2 list-decimal pl-5; } .markdown strong { @apply font-bold; } .markdown h1,.markdown h2,.markdown h3 { @apply mt-3 mb-2 font-bold; } .markdown code { @apply break-words rounded px-1; background:var(--surface-soft); }
+}
+/* Compatibilidade visual com classes Tailwind existentes nos módulos; sem alterar os serviços de API. */
+:root[data-theme="dark"] .bg-white { background-color:var(--surface); }
+:root[data-theme="dark"] .bg-slate-50,:root[data-theme="dark"] .bg-slate-100,:root[data-theme="dark"] .bg-slate-200 { background-color:var(--surface-soft); }
+:root[data-theme="dark"] .text-slate-900,:root[data-theme="dark"] .text-slate-800,:root[data-theme="dark"] .text-slate-700,:root[data-theme="dark"] .text-slate-600 { color:var(--text); }
+:root[data-theme="dark"] .text-slate-500,:root[data-theme="dark"] .text-slate-400 { color:var(--muted); }
+:root[data-theme="dark"] .border-slate-200,:root[data-theme="dark"] .border-slate-300 { border-color:var(--border); }
+:root[data-theme="dark"] .bg-slate-900 { background-color:var(--primary); }
+:root[data-theme="dark"] .text-white { color:#fff; }
+:root[data-theme="dark"] .bg-red-50 { background-color:#3b202c; }
+:root[data-theme="dark"] .text-red-800,:root[data-theme="dark"] .text-red-700 { color:#fda4af; }
+@media (prefers-reduced-motion:reduce) { *,*::before,*::after { scroll-behavior:auto!important; transition-duration:.01ms!important; animation-duration:.01ms!important; } }
+
+/* Etapa 2: componentes orientados à jornada da audiência */
+.upload-zone { display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;border:2px dashed var(--border);background:var(--surface-soft);border-radius:16px;padding:32px 16px;transition:border-color .15s,background .15s; }
+.upload-zone-active { border-color:var(--accent);background:var(--surface); }
+.media-item { border:1px solid var(--border);border-radius:14px;padding:16px;background:var(--surface); }
+.status-card { border:1px solid var(--border);border-radius:14px;padding:14px;background:var(--surface-soft); }
+.empty-transcription { min-height:250px;display:flex;flex-direction:column;align-items:center;justify-content:center;border:1px dashed var(--border);border-radius:16px;padding:24px;background:var(--surface-soft); }
+.transcript-body { max-height:540px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;border-radius:14px;padding:20px;background:var(--surface-soft);font-size:14px;line-height:1.85;color:var(--text); }
+
+/* Etapa 3 — Assistente Jurídico responsivo e adaptável ao tema */
+.rag-chat { display:flex;flex-direction:column;min-height:520px; }
+.rag-messages { flex:1;min-width:0;display:flex;flex-direction:column;gap:20px;max-height:min(66vh,720px);min-height:320px;overflow-y:auto;overscroll-behavior:contain;padding:8px 2px 24px; }
+.rag-empty { display:flex;flex:1;flex-direction:column;align-items:center;justify-content:center;padding:20px 8px;text-align:center; }
+.rag-empty-icon { display:grid;place-items:center;width:54px;height:54px;border-radius:18px;background:var(--surface-soft);color:var(--accent); }
+.rag-suggestions { display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;width:100%;max-width:680px;text-align:left; }
+.rag-suggestion { border:1px solid var(--border);border-radius:12px;padding:12px 14px;background:var(--surface);color:var(--text);font-size:13px;text-align:left;line-height:1.5; }
+.rag-suggestion:hover { border-color:var(--accent);background:var(--surface-soft); }
+.rag-message { display:flex;min-width:0; }
+.rag-user { justify-content:flex-end; }
+.rag-assistant { justify-content:flex-start; }
+.rag-bubble { min-width:0;max-width:88%;padding:16px 18px;border:1px solid var(--border);border-radius:16px;background:var(--surface-soft);color:var(--text);font-size:14px;line-height:1.75;overflow-wrap:anywhere; }
+.rag-user .rag-bubble { background:var(--primary);color:#fff;border-color:transparent; }
+.rag-error .rag-bubble { border-color:#dc6d7b; }
+.rag-speaker { display:flex;align-items:center;gap:8px;margin-bottom:10px;font-size:12px;font-weight:700;color:var(--accent); }
+.rag-copy { display:inline-flex;align-items:center;gap:6px;margin-top:12px;padding:6px 0;color:var(--muted);font-size:12px;font-weight:600; }
+.rag-copy:hover { color:var(--accent); }
+.rag-processing { display:flex;align-items:center;gap:10px;color:var(--muted);font-size:13px; }
+.rag-composer { display:flex;align-items:flex-end;gap:10px;border-top:1px solid var(--border);padding-top:16px; }
+.rag-input { min-height:60px;max-height:180px;resize:vertical; }
+.rag-send { min-height:48px;flex-shrink:0; }
+.sources-box { padding:12px;border:1px solid var(--border);border-radius:12px;background:var(--surface);color:var(--text); }
+.sources-toggle { display:flex;width:100%;align-items:center;justify-content:space-between;gap:8px;text-align:left;font-size:12px;font-weight:700; }
+.source-count { border-radius:999px;padding:1px 8px;background:var(--surface-soft);color:var(--muted); }
+.source-entry { padding:12px;border:1px solid var(--border);border-radius:10px;background:var(--surface-soft); }
+@media(max-width:640px) { .rag-chat { min-height:420px; } .rag-messages { min-height:300px;max-height:55dvh; } .rag-suggestions { grid-template-columns:1fr; } .rag-bubble { max-width:96%;padding:13px; } .rag-composer { gap:8px; } .rag-send { width:48px;padding:0; } }

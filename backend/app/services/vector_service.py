@@ -1,63 +1,67 @@
+
+import uuid
+from collections import defaultdict
+
 from chromadb import PersistentClient
-from app.config import settings
 
-# Inicialização do Banco Vetorial ChromaDB com Persistência em Disco
+from app.services.chunking_service import chunk_segments
+
+
+# Coleção antiga:
+# juridical_audio_index
+#
+# Ela será preservada, mas não utilizada pela aplicação.
+#
+# A coleção v2 recebe somente documentos que possuem
+# um proprietário autenticado.
+
 db_client = PersistentClient(path="./chroma_db")
-collection = db_client.get_or_create_collection(name="juridical_audio_index")
 
-def chunk_segments(segments: list, max_words: int = 150, overlap_words: int = 30) -> list:
+collection = db_client.get_or_create_collection(
+    name="juridical_audio_index_v2"
+)
+
+
+def _validate_owner(owner_user_id: str) -> str:
     """
-    Agrupa segmentos breves do Whisper em janelas de contexto maiores (Sliding Window),
-    preservando com exatidão o timestamp inicial (start) e final (end) do bloco.
-    Evita perda de contexto probatório em diálogos de audiências.
+    Impede consultas ou gravações sem proprietário.
+
+    O identificador deve ser fornecido pelo backend
+    após validação da sessão, nunca pelo navegador.
     """
-    chunks = []
-    current_chunk_words = []
-    current_start = None
-    current_end = None
+    if not isinstance(owner_user_id, str):
+        raise ValueError(
+            "O identificador do advogado é obrigatório."
+        )
 
-    for seg in segments:
-        text = seg.get("text", "").strip()
-        if not text:
-            continue
+    try:
+        return str(uuid.UUID(owner_user_id))
+    except (ValueError, AttributeError) as exc:
+        raise ValueError(
+            "Identificador do advogado inválido."
+        ) from exc
 
-        words = text.split()
-        if current_start is None:
-            current_start = float(seg.get("start", 0.0))
 
-        current_end = float(seg.get("end", 0.0))
-        current_chunk_words.extend(words)
-
-        # Se atingir o limite de palavras por janela, consolida o chunk
-        if len(current_chunk_words) >= max_words:
-            chunk_text = " ".join(current_chunk_words)
-            chunks.append({
-                "text": chunk_text,
-                "start": current_start,
-                "end": current_end
-            })
-            
-            # Aplica sobreposição (overlap) para manter a continuidade semântica
-            overlap_text = current_chunk_words[-overlap_words:] if len(current_chunk_words) > overlap_words else []
-            current_chunk_words = overlap_text
-            current_start = current_end
-
-    # Adiciona o último bloco remanescente, se existir
-    if current_chunk_words:
-        chunks.append({
-            "text": " ".join(current_chunk_words),
-            "start": current_start,
-            "end": current_end
-        })
-
-    return chunks
-
-def index_transcript_segments(audio_filename: str, segments: list) -> dict:
+def index_transcript_segments(
+    audio_filename: str,
+    segments: list,
+    owner_user_id: str,
+) -> dict:
     """
-    Processa os segmentos do Whisper via janelas deslizantes e indexa os chunks no ChromaDB.
+    Indexa uma transcrição com proprietário obrigatório.
+
+    Cada upload recebe um media_id exclusivo, evitando
+    colisões quando arquivos possuem o mesmo nome.
     """
-    # Realiza o chunking contextualizado
-    contextual_chunks = chunk_segments(segments, max_words=120, overlap_words=25)
+    owner_id = _validate_owner(owner_user_id)
+
+    contextual_chunks = chunk_segments(
+        segments,
+        max_words=120,
+        overlap_words=25,
+    )
+
+    media_id = str(uuid.uuid4())
 
     documents = []
     metadatas = []
@@ -65,69 +69,194 @@ def index_transcript_segments(audio_filename: str, segments: list) -> dict:
 
     for idx, chunk in enumerate(contextual_chunks):
         documents.append(chunk["text"])
+
         metadatas.append({
+            "owner_user_id": owner_id,
+            "media_id": media_id,
             "audio_filename": audio_filename,
             "start": float(chunk["start"]),
-            "end": float(chunk["end"])
+            "end": float(chunk["end"]),
         })
-        ids.append(f"{audio_filename}_chunk_{idx}")
+
+        ids.append(
+            f"{media_id}_chunk_{idx}"
+        )
 
     if documents:
         collection.add(
             documents=documents,
             metadatas=metadatas,
-            ids=ids
+            ids=ids,
         )
 
     return {
         "status": "indexado",
-        "chunks_count": len(documents)
+        "chunks_count": len(documents),
+        "media_id": media_id,
     }
 
-def search_audio_context(query: str, n_results: int = 6, audio_filter: str = None) -> list:
+
+def search_audio_context(
+    query: str,
+    n_results: int = 6,
+    audio_filter: str | None = None,
+    owner_user_id: str | None = None,
+) -> list:
     """
-    Busca semântica no ChromaDB filtrada por arquivo (opcional).
-    Retorna os blocos vetoriais mais relevantes com seus timestamps.
+    Busca semântica restrita ao advogado autenticado.
+
+    O filtro de proprietário é sempre obrigatório.
+    O filtro de arquivo é apenas complementar.
     """
-    where_clause = None
-    if audio_filter and audio_filter not in ["Todos os Áudios", "Todas as Mídias"]:
-        where_clause = {"audio_filename": audio_filter}
+    owner_id = _validate_owner(owner_user_id)
+
+    if not isinstance(query, str) or not query.strip():
+        raise ValueError(
+            "A pergunta não pode estar vazia."
+        )
+
+    if not 1 <= n_results <= 20:
+        raise ValueError(
+            "n_results deve estar entre 1 e 20."
+        )
+
+    owner_filter = {
+        "owner_user_id": owner_id
+    }
+
+    if (
+        audio_filter
+        and audio_filter not in (
+            "Todos os Áudios",
+            "Todas as Mídias",
+        )
+    ):
+        where_clause = {
+            "$and": [
+                owner_filter,
+                {
+                    "audio_filename": audio_filter
+                },
+            ]
+        }
+    else:
+        where_clause = owner_filter
+
+    # Consulta apenas registros pertencentes ao usuário.
+    # Caso não existam, evita uma busca desnecessária.
+    matching = collection.get(
+        where=where_clause,
+        include=["metadatas"],
+    )
+
+    matching_ids = matching.get("ids") or []
+
+    if not matching_ids:
+        return []
 
     results = collection.query(
         query_texts=[query],
-        n_results=n_results,
-        where=where_clause
+        n_results=min(
+            n_results,
+            len(matching_ids),
+        ),
+        where=where_clause,
     )
 
     formatted_results = []
-    if results and "documents" in results and results["documents"]:
-        docs = results["documents"][0]
-        metas = results["metadatas"][0]
-        for doc, meta in zip(docs, metas):
-            formatted_results.append({
-                "text": doc,
-                "start": meta.get("start", 0.0),
-                "end": meta.get("end", 0.0),
-                "audio_filename": meta.get("audio_filename", "Mídia")
-            })
+
+    documents = results.get("documents") or []
+    metadatas = results.get("metadatas") or []
+
+    if not documents or not metadatas:
+        return []
+
+    for doc, meta in zip(
+        documents[0],
+        metadatas[0],
+    ):
+        if not meta:
+            continue
+
+        # Verificação adicional de defesa.
+        if meta.get("owner_user_id") != owner_id:
+            continue
+
+        formatted_results.append({
+            "text": doc,
+            "start": meta.get("start", 0.0),
+            "end": meta.get("end", 0.0),
+            "audio_filename": meta.get(
+                "audio_filename",
+                "Mídia",
+            ),
+            "media_id": meta.get("media_id", ""),
+        })
 
     return formatted_results
 
-def get_indexed_audio_history() -> list:
-    """
-    Retorna a lista de arquivos já indexados na base vetorial e o total de blocos por arquivo.
-    """
-    try:
-        all_data = collection.get(include=["metadatas"])
-        metadatas = all_data.get("metadatas", [])
-        
-        file_counts = {}
-        for meta in metadatas:
-            filename = meta.get("audio_filename")
-            if filename:
-                file_counts[filename] = file_counts.get(filename, 0) + 1
 
-        history = [{"filename": fname, "chunks_count": count} for fname, count in file_counts.items()]
-        return history
-    except Exception:
-        return []
+def get_indexed_audio_history(
+    owner_user_id: str,
+) -> list:
+    """
+    Retorna exclusivamente as mídias do advogado.
+
+    Agrupa por media_id, permitindo que dois uploads
+    tenham o mesmo nome sem serem confundidos.
+    """
+    owner_id = _validate_owner(owner_user_id)
+
+    data = collection.get(
+        where={
+            "owner_user_id": owner_id
+        },
+        include=[
+            "metadatas",
+            "documents",
+        ],
+    )
+
+    metadatas = data.get("metadatas") or []
+    documents = data.get("documents") or []
+
+    media_map = defaultdict(
+        lambda: {
+            "filename": "",
+            "chunks_count": 0,
+            "preview": "",
+            "media_id": "",
+        }
+    )
+
+    for meta, document in zip(
+        metadatas,
+        documents,
+    ):
+        if not meta:
+            continue
+
+        if meta.get("owner_user_id") != owner_id:
+            continue
+
+        media_id = meta.get("media_id")
+
+        if not media_id:
+            continue
+
+        item = media_map[media_id]
+
+        item["media_id"] = media_id
+        item["filename"] = meta.get(
+            "audio_filename",
+            "Mídia",
+        )
+
+        item["chunks_count"] += 1
+
+        if not item["preview"]:
+            item["preview"] = (
+                document or ""
+            )[:100]
+
+    return list(media_map.values())

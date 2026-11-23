@@ -1,16 +1,44 @@
-# Ambientes Virtuais
-venv/
-env/
-__pycache__/
-*.pyc
+# Credenciais e variáveis de ambiente
+.env
+.env.*
+!.env.example
 
-# Banco de Dados Vetorial Local e Chunks temporários
-chroma_db/
+# Python
+venv/
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+
+# Node / React
+node_modules/
+dist/
+.vite/
+coverage/
+
+# IDE e sistema
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Arquivos temporários e mídias
+*.mp4
+*.mkv
+*.avi
+*.mov
 *.mp3
 *.wav
 *.m4a
+*.ogg
+*.webm
 
-# Configurações sensíveis e logs
-.env
-.DS_Store
+# Logs
 *.log
+
+# Banco vetorial local
+backend/chroma_db/
+
+# Arquivos gerados pelo TypeScript
+*.tsbuildinfo
